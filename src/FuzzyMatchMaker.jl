@@ -103,8 +103,10 @@ function fuzzymatch(catalog,
 end
 
 function matchquality(src,mat,weights)
+    #expensive
     all(src .== mat) && return 1.0
     cscore = 0.0
+    #expensive to enumerate
     for (i,word) in enumerate(mat)
         word in src && (cscore += 1.0*weights[i])
     end
