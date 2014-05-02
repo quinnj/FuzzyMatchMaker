@@ -4,6 +4,7 @@ export buildcatalog, fuzzymatch
 
 using DataFrames
 using ArrayViews
+using Distance
 #TODO
  #Make sure stopwords/null work
  #Scoring
@@ -14,8 +15,8 @@ using ArrayViews
   #Levenshtein distance
 type Catalog
     index::Dict{ASCIIString,Set{ASCIIString}}
-    source::Dict{ASCIIString,Array{ASCIIString,1}}
-    Catalog() = new(Dict{ASCIIString,Set{ASCIIString}}(),Dict{ASCIIString,Array{ASCIIString,1}}())
+    source::Dict{ASCIIString,Set{ASCIIString}}
+    Catalog() = new(Dict{ASCIIString,Set{ASCIIString}}(),Dict{ASCIIString,Set{ASCIIString}}())
 end
 
 function buildcatalog(src,stopwords=ASCIIString[],repl=Dict{ASCIIString,ASCIIString}())
@@ -27,14 +28,14 @@ function buildcatalog(src,stopwords=ASCIIString[],repl=Dict{ASCIIString,ASCIIStr
     sizehint(catalog.index,srows*scols)
     sizehint(catalog.source,srows)
     for i = 1:srows
-        catalog.source[srcids[i]] = Array(ASCIIString,scols)
+        catalog.source[srcids[i]] = Set{ASCIIString}()
         for j = 1:scols
             f = get(repl,src[i,j],src[i,j])
             if !(f in stops)
                 catalog.index[f] = push!(get(catalog.index,f,Set{ASCIIString}()),srcids[i])
-                catalog.source[srcids[i]][j] = f
+                push!(catalog.source[srcids[i]],f)
             else
-                catalog.source[srcids[i]][j] = ""
+                push!(catalog.source[srcids[i]],"")
             end
         end
     end
@@ -57,7 +58,8 @@ function fuzzymatch(catalog,
         potentials = Set{ASCIIString}()
         sizehint(potentials,256)
         for j = 1:mcols
-            word = uppercase(get(repl,mat[i,j],mat[i,j]))
+            mat[i,j] = uppercase(mat[i,j])
+            word = get(repl,mat[i,j],mat[i,j])
             if !(word in stops)
                 #expensive
                 union!(potentials,get(catalog.index,word,Set{ASCIIString}()))
@@ -66,8 +68,9 @@ function fuzzymatch(catalog,
         indices = Array(ASCIIString,length(potentials))
         scores = zeros(length(potentials))
         mview = view(mat,i,1:mcols)
+        matjoin = join(mview)
         for (ind,potmat) in enumerate(potentials)
-            score = matchquality(catalog.source[potmat],mview,weights)
+            score = matchquality(catalog.source[potmat],mview,matjoin,weights)
             indices[ind] = potmat
             scores[ind] = score
         end
@@ -102,16 +105,45 @@ function fuzzymatch(catalog,
     return DataFrame(results,DataFrames.Index(names))
 end
 
-function matchquality(src,mat,weights)
-    #expensive
-    all(src .== mat) && return 1.0
+function matchquality(src,mat,matjoin,weights)
     cscore = 0.0
-    #expensive to enumerate
-    for (i,word) in enumerate(mat)
-        word in src && (cscore += 1.0*weights[i])
+    len = length(src)
+    for i = 1:len
+        mat[i] in src && (cscore += 1.0*weights[i])
     end
-    cscore = cscore/length(src)
+    cscore = cscore/len
+    #leven = levenshtein(join(src),matjoin)/length(matjoin)
+    #return max(cscore,leven)
     return cscore
+end
+
+function levenshtein{T<:String}(s1::T,s2::T;deletion_cost=1,substitution_cost=1,insertion_cost=1)
+    s1len = length(s1)
+    s2len = length(s2)
+    if s1len == 0 
+        return s2len
+    elseif s2len == 0
+        return s1len
+    elseif s1len > s2len
+        s1,s2 = s2,s1
+        s1len,s2len = s2len,s1len
+    end
+    prev = [1:s1len+1]
+    curr = [zeros(Int,s1len+1)]
+    for (i2, c2) in enumerate(s2)
+        curr[1] = (i2-1)
+        for (i1, c1) in enumerate(s1)
+            if c1 == c2
+                curr[i1+1] = prev[i1]
+            else
+                curr[i1+1] = min(prev[i1]+substitution_cost,
+                                 prev[i1+1]+deletion_cost,
+                                 curr[i1]+insertion_cost)
+            end
+        end
+        copy!(prev,curr)
+    end
+    return prev[end]
 end
 
 end # module
